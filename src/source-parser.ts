@@ -35,8 +35,30 @@ function isLocalPath(input: string): boolean {
 }
 
 /**
+ * Check if a URL is a direct link to a skill.md file (non-GitHub/GitLab)
+ * e.g., https://docs.bun.com/docs/skill.md
+ */
+function isDirectSkillUrl(input: string): boolean {
+    if (!input.startsWith('http://') && !input.startsWith('https://')) {
+        return false;
+    }
+    
+    // Must end with skill.md (case insensitive)
+    if (!input.toLowerCase().endsWith('/skill.md')) {
+        return false;
+    }
+    
+    // Exclude GitHub and GitLab URLs - they have their own handling
+    if (input.includes('github.com') || input.includes('gitlab.com')) {
+        return false;
+    }
+    
+    return true;
+}
+
+/**
  * Parse a source string into a structured format
- * Supports: local paths, GitHub URLs, GitLab URLs, GitHub shorthand, and direct git URLs
+ * Supports: local paths, GitHub URLs, GitLab URLs, GitHub shorthand, direct skill.md URLs, and direct git URLs
  */
 export function parseSource(input: string): ParsedSource {
     // Local path: absolute, relative, or current directory
@@ -47,6 +69,14 @@ export function parseSource(input: string): ParsedSource {
             type: 'local',
             url: resolvedPath, // Store resolved path in url for consistency
             localPath: resolvedPath,
+        };
+    }
+
+    // Direct skill.md URL (non-GitHub/GitLab): https://docs.bun.com/docs/skill.md
+    if (isDirectSkillUrl(input)) {
+        return {
+            type: 'direct-url',
+            url: input,
         };
     }
 

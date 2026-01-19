@@ -16,9 +16,17 @@ export interface AgentConfig {
 }
 
 export interface ParsedSource {
-  type: 'github' | 'gitlab' | 'git' | 'local';
+  type: 'github' | 'gitlab' | 'git' | 'local' | 'direct-url';
   url: string;
   subpath?: string;
   localPath?: string;
   ref?: string;
+}
+
+export interface MintlifySkill {
+  name: string;
+  description: string;
+  content: string;
+  mintlifySite: string;
+  sourceUrl: string;
 }

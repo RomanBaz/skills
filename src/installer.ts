@@ -1,7 +1,6 @@
-import { mkdir, cp, access, readdir, symlink, lstat, rm, readlink } from 'fs/promises';
-import { join, basename, normalize, resolve, sep, relative } from 'path';
-import { homedir, platform } from 'os';
-import type { Skill, AgentType } from './types.js';
+import { mkdir, cp, access, readdir, writeFile } from 'fs/promises';
+import { join, basename, normalize, resolve, sep } from 'path';
+import type { Skill, AgentType, MintlifySkill } from './types.js';
 import { agents } from './agents.js';
 
 const AGENTS_DIR = '.agents';
@@ -285,19 +284,47 @@ export function getInstallPath(
 }
 
 /**
- * Gets the canonical .agents/skills/<skill> path
+ * Install a Mintlify skill from a direct URL
+ * The skill name is derived from the mintlify-site frontmatter
  */
-export function getCanonicalPath(
-  skillName: string,
+export async function installMintlifySkillForAgent(
+  skill: MintlifySkill,
+  agentType: AgentType,
   options: { global?: boolean; cwd?: string } = {}
-): string {
-  const sanitized = sanitizeName(skillName);
-  const canonicalBase = getCanonicalSkillsDir(options.global ?? false, options.cwd);
-  const canonicalPath = join(canonicalBase, sanitized);
+): Promise<InstallResult> {
+  const agent = agents[agentType];
   
-  if (!isPathSafe(canonicalBase, canonicalPath)) {
-    throw new Error('Invalid skill name: potential path traversal detected');
+  // Use mintlify-site as the skill directory name (e.g., "bun.com")
+  const skillName = sanitizeName(skill.mintlifySite);
+  
+  const targetBase = options.global
+    ? agent.globalSkillsDir
+    : join(options.cwd || process.cwd(), agent.skillsDir);
+
+  const targetDir = join(targetBase, skillName);
+  
+  // Validate that the target directory is within the expected base
+  if (!isPathSafe(targetBase, targetDir)) {
+    return {
+      success: false,
+      path: targetDir,
+      error: 'Invalid skill name: potential path traversal detected',
+    };
   }
-  
-  return canonicalPath;
+
+  try {
+    await mkdir(targetDir, { recursive: true });
+    
+    // Write the SKILL.md content directly
+    const skillMdPath = join(targetDir, 'SKILL.md');
+    await writeFile(skillMdPath, skill.content, 'utf-8');
+
+    return { success: true, path: targetDir };
+  } catch (error) {
+    return {
+      success: false,
+      path: targetDir,
+      error: error instanceof Error ? error.message : 'Unknown error',
+    };
+  }
 }

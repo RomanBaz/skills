@@ -6,37 +6,11 @@ import chalk from 'chalk';
 import { parseSource, getOwnerRepo } from './source-parser.js';
 import { cloneRepo, cleanupTempDir } from './git.js';
 import { discoverSkills, getSkillDisplayName } from './skills.js';
-import { installSkillForAgent, isSkillInstalled, getCanonicalPath, getInstallPath, type InstallMode } from './installer.js';
-import { homedir } from 'os';
-
-/**
- * Shortens a path for display: replaces homedir with ~ and cwd with .
- */
-function shortenPath(fullPath: string, cwd: string): string {
-  const home = homedir();
-  if (fullPath.startsWith(home)) {
-    return fullPath.replace(home, '~');
-  }
-  if (fullPath.startsWith(cwd)) {
-    return '.' + fullPath.slice(cwd.length);
-  }
-  return fullPath;
-}
-
-/**
- * Formats a list of items, truncating if too many
- */
-function formatList(items: string[], maxShow: number = 5): string {
-  if (items.length <= maxShow) {
-    return items.join(', ');
-  }
-  const shown = items.slice(0, maxShow);
-  const remaining = items.length - maxShow;
-  return `${shown.join(', ')} +${remaining} more`;
-}
+import { installSkillForAgent, isSkillInstalled, getInstallPath, installMintlifySkillForAgent } from './installer.js';
 import { detectInstalledAgents, agents } from './agents.js';
 import { track, setVersion } from './telemetry.js';
-import type { Skill, AgentType } from './types.js';
+import { fetchMintlifySkill } from './mintlify.js';
+import type { Skill, AgentType, MintlifySkill } from './types.js';
 import packageJson from '../package.json' with { type: 'json' };
 
 const version = packageJson.version;
@@ -87,6 +61,224 @@ program
 
 program.parse();
 
+/**
+ * Handle direct URL skill installation (Mintlify-hosted skills)
+ * These are single skill.md files fetched directly from a URL
+ */
+async function handleDirectUrlSkill(
+  source: string, 
+  url: string, 
+  options: Options,
+  spinner: ReturnType<typeof p.spinner>
+) {
+  spinner.start('Fetching skill.md...');
+  const mintlifySkill = await fetchMintlifySkill(url);
+
+  if (!mintlifySkill) {
+    spinner.stop(chalk.red('Invalid skill'));
+    p.outro(chalk.red('Could not fetch skill.md or missing required frontmatter (name, description, mintlify-site).'));
+    process.exit(1);
+  }
+
+  spinner.stop(`Found skill: ${chalk.cyan(mintlifySkill.mintlifySite)}`);
+  
+  p.log.info(`Skill: ${chalk.cyan(mintlifySkill.name)}`);
+  p.log.message(chalk.dim(mintlifySkill.description));
+  p.log.message(chalk.dim(`Source: mintlify/skills`));
+
+  if (options.list) {
+    console.log();
+    p.log.step(chalk.bold('Skill Details'));
+    p.log.message(`  ${chalk.cyan('Name:')} ${mintlifySkill.name}`);
+    p.log.message(`  ${chalk.cyan('Site:')} ${mintlifySkill.mintlifySite}`);
+    p.log.message(`  ${chalk.cyan('Description:')} ${mintlifySkill.description}`);
+    console.log();
+    p.outro('Run without --list to install');
+    process.exit(0);
+  }
+
+  // Detect agents
+  let targetAgents: AgentType[];
+  const validAgents = Object.keys(agents);
+
+  if (options.agent && options.agent.length > 0) {
+    const invalidAgents = options.agent.filter(a => !validAgents.includes(a));
+
+    if (invalidAgents.length > 0) {
+      p.log.error(`Invalid agents: ${invalidAgents.join(', ')}`);
+      p.log.info(`Valid agents: ${validAgents.join(', ')}`);
+      process.exit(1);
+    }
+
+    targetAgents = options.agent as AgentType[];
+  } else {
+    spinner.start('Detecting installed agents...');
+    const installedAgents = await detectInstalledAgents();
+    spinner.stop(`Detected ${installedAgents.length} agent${installedAgents.length !== 1 ? 's' : ''}`);
+
+    if (installedAgents.length === 0) {
+      if (options.yes) {
+        targetAgents = validAgents as AgentType[];
+        p.log.info('Installing to all agents (none detected)');
+      } else {
+        p.log.warn('No coding agents detected. You can still install skills.');
+
+        const allAgentChoices = Object.entries(agents).map(([key, config]) => ({
+          value: key as AgentType,
+          label: config.displayName,
+        }));
+
+        const selected = await p.multiselect({
+          message: 'Select agents to install skills to',
+          options: allAgentChoices,
+          required: true,
+          initialValues: Object.keys(agents) as AgentType[],
+        });
+
+        if (p.isCancel(selected)) {
+          p.cancel('Installation cancelled');
+          process.exit(0);
+        }
+
+        targetAgents = selected as AgentType[];
+      }
+    } else if (installedAgents.length === 1 || options.yes) {
+      targetAgents = installedAgents;
+      if (installedAgents.length === 1) {
+        const firstAgent = installedAgents[0]!;
+        p.log.info(`Installing to: ${chalk.cyan(agents[firstAgent].displayName)}`);
+      } else {
+        p.log.info(`Installing to: ${installedAgents.map(a => chalk.cyan(agents[a].displayName)).join(', ')}`);
+      }
+    } else {
+      const agentChoices = installedAgents.map(a => ({
+        value: a,
+        label: agents[a].displayName,
+        hint: `${options.global ? agents[a].globalSkillsDir : agents[a].skillsDir}`,
+      }));
+
+      const selected = await p.multiselect({
+        message: 'Select agents to install skills to',
+        options: agentChoices,
+        required: true,
+        initialValues: installedAgents,
+      });
+
+      if (p.isCancel(selected)) {
+        p.cancel('Installation cancelled');
+        process.exit(0);
+      }
+
+      targetAgents = selected as AgentType[];
+    }
+  }
+
+  let installGlobally = options.global ?? false;
+
+  if (options.global === undefined && !options.yes) {
+    const scope = await p.select({
+      message: 'Installation scope',
+      options: [
+        { value: false, label: 'Project', hint: 'Install in current directory (committed with your project)' },
+        { value: true, label: 'Global', hint: 'Install in home directory (available across all projects)' },
+      ],
+    });
+
+    if (p.isCancel(scope)) {
+      p.cancel('Installation cancelled');
+      process.exit(0);
+    }
+
+    installGlobally = scope as boolean;
+  }
+
+  // Build installation summary
+  const summaryLines: string[] = [];
+  const maxAgentLen = Math.max(...targetAgents.map(a => agents[a].displayName.length));
+  
+  // Check for overwrites
+  const overwriteStatus = new Map<string, boolean>();
+  for (const agent of targetAgents) {
+    overwriteStatus.set(agent, await isSkillInstalled(mintlifySkill.mintlifySite, agent, { global: installGlobally }));
+  }
+  
+  summaryLines.push(chalk.bold.cyan(mintlifySkill.mintlifySite));
+  summaryLines.push('');
+  summaryLines.push(`  ${chalk.bold('Agent'.padEnd(maxAgentLen + 2))}${chalk.bold('Directory')}`);
+  
+  for (const agent of targetAgents) {
+    const fullPath = getInstallPath(mintlifySkill.mintlifySite, agent, { global: installGlobally });
+    const basePath = fullPath.replace(/\/[^/]+$/, '/');
+    const installed = overwriteStatus.get(agent) ?? false;
+    const status = installed ? chalk.yellow(' (overwrite)') : '';
+    const agentName = agents[agent].displayName.padEnd(maxAgentLen + 2);
+    summaryLines.push(`  ${agentName}${chalk.dim(basePath)}${status}`);
+  }
+  
+  console.log();
+  p.note(summaryLines.join('\n'), 'Installation Summary');
+
+  if (!options.yes) {
+    const confirmed = await p.confirm({ message: 'Proceed with installation?' });
+
+    if (p.isCancel(confirmed) || !confirmed) {
+      p.cancel('Installation cancelled');
+      process.exit(0);
+    }
+  }
+
+  spinner.start('Installing skill...');
+
+  const results: { skill: string; agent: string; success: boolean; path: string; error?: string }[] = [];
+
+  for (const agent of targetAgents) {
+    const result = await installMintlifySkillForAgent(mintlifySkill, agent, { global: installGlobally });
+    results.push({
+      skill: mintlifySkill.mintlifySite,
+      agent: agents[agent].displayName,
+      ...result,
+    });
+  }
+
+  spinner.stop('Installation complete');
+
+  console.log();
+  const successful = results.filter(r => r.success);
+  const failed = results.filter(r => !r.success);
+
+  // Track installation - use mintlify/skills as source
+  track({
+    event: 'install',
+    source: 'mintlify/skills',
+    skills: mintlifySkill.mintlifySite,
+    agents: targetAgents.join(','),
+    ...(installGlobally && { global: '1' }),
+    skillFiles: JSON.stringify({ [mintlifySkill.mintlifySite]: url }),
+  });
+
+  if (successful.length > 0) {
+    const resultLines: string[] = [];
+    resultLines.push(`${chalk.green('✓')} ${chalk.bold(mintlifySkill.mintlifySite)}`);
+    for (const r of successful) {
+      resultLines.push(`  ${chalk.dim(r.agent)}`);
+    }
+    
+    const title = chalk.green(`Installed 1 skill to ${successful.length} agent${successful.length !== 1 ? 's' : ''}`);
+    p.note(resultLines.join('\n'), title);
+  }
+
+  if (failed.length > 0) {
+    console.log();
+    p.log.error(chalk.red(`Failed to install ${failed.length}`));
+    for (const r of failed) {
+      p.log.message(`  ${chalk.red('✗')} ${r.skill} → ${r.agent}: ${chalk.dim(r.error)}`);
+    }
+  }
+
+  console.log();
+  p.outro(chalk.green('Done!'));
+}
+
 async function main(source: string, options: Options) {
     if (options.all) {
     options.yes = true;
@@ -104,6 +296,12 @@ async function main(source: string, options: Options) {
     spinner.start('Parsing source...');
     const parsed = parseSource(source);
     spinner.stop(`Source: ${chalk.cyan(parsed.type === 'local' ? parsed.localPath! : parsed.url)}${parsed.ref ? ` @ ${chalk.yellow(parsed.ref)}` : ''}${parsed.subpath ? ` (${parsed.subpath})` : ''}`);
+
+    // Handle direct URL (Mintlify) skills separately
+    if (parsed.type === 'direct-url') {
+      await handleDirectUrlSkill(source, parsed.url, options, spinner);
+      return;
+    }
 
     let skillsDir: string;
 
