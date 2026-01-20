@@ -6,7 +6,34 @@ import chalk from 'chalk';
 import { parseSource, getOwnerRepo } from './source-parser.js';
 import { cloneRepo, cleanupTempDir } from './git.js';
 import { discoverSkills, getSkillDisplayName } from './skills.js';
-import { installSkillForAgent, isSkillInstalled, getInstallPath } from './installer.js';
+import { installSkillForAgent, isSkillInstalled, getCanonicalPath, getInstallPath } from './installer.js';
+import { homedir } from 'os';
+
+/**
+ * Shortens a path for display: replaces homedir with ~ and cwd with .
+ */
+function shortenPath(fullPath: string, cwd: string): string {
+  const home = homedir();
+  if (fullPath.startsWith(home)) {
+    return fullPath.replace(home, '~');
+  }
+  if (fullPath.startsWith(cwd)) {
+    return '.' + fullPath.slice(cwd.length);
+  }
+  return fullPath;
+}
+
+/**
+ * Formats a list of items, truncating if too many
+ */
+function formatList(items: string[], maxShow: number = 5): string {
+  if (items.length <= maxShow) {
+    return items.join(', ');
+  }
+  const shown = items.slice(0, maxShow);
+  const remaining = items.length - maxShow;
+  return `${shown.join(', ')} +${remaining} more`;
+}
 import { detectInstalledAgents, agents } from './agents.js';
 import { track, setVersion } from './telemetry.js';
 import type { Skill, AgentType } from './types.js';
@@ -61,8 +88,7 @@ program
 program.parse();
 
 async function main(source: string, options: Options) {
-  // --all implies -y and -g
-  if (options.all) {
+    if (options.all) {
     options.yes = true;
     options.global = true;
   }
@@ -82,7 +108,6 @@ async function main(source: string, options: Options) {
     let skillsDir: string;
 
     if (parsed.type === 'local') {
-      // Use local path directly, no cloning needed
       spinner.start('Validating local path...');
       const { existsSync } = await import('fs');
       if (!existsSync(parsed.localPath!)) {
@@ -93,7 +118,6 @@ async function main(source: string, options: Options) {
       skillsDir = parsed.localPath!;
       spinner.stop('Local path validated');
     } else {
-      // Clone repository for remote sources
       spinner.start('Cloning repository...');
       tempDir = await cloneRepo(parsed.url, parsed.ref);
       skillsDir = tempDir;
@@ -191,7 +215,6 @@ async function main(source: string, options: Options) {
 
       targetAgents = options.agent as AgentType[];
     } else if (options.all) {
-      // --all flag: install to all agents without detection
       targetAgents = validAgents as AgentType[];
       p.log.info(`Installing to all ${targetAgents.length} agents`);
     } else {
@@ -278,13 +301,8 @@ async function main(source: string, options: Options) {
       installGlobally = scope as boolean;
     }
 
-    // Build installation summary table
+    const cwd = process.cwd();
     const summaryLines: string[] = [];
-    
-    // Find the longest agent name for padding
-    const maxAgentLen = Math.max(...targetAgents.map(a => agents[a].displayName.length));
-    
-    // Check if any skill will be overwritten
     const overwriteStatus = new Map<string, Map<string, boolean>>();
     for (const skill of selectedSkills) {
       const agentStatus = new Map<string, boolean>();
@@ -294,20 +312,27 @@ async function main(source: string, options: Options) {
       overwriteStatus.set(skill.name, agentStatus);
     }
     
+    const agentNames = targetAgents.map(a => agents[a].displayName);
+    const hasOverwrites = Array.from(overwriteStatus.values()).some(
+      agentMap => Array.from(agentMap.values()).some(v => v)
+    );
+    
     for (const skill of selectedSkills) {
-      if (summaryLines.length > 0) summaryLines.push(''); // separator between skills
-      summaryLines.push(chalk.bold.cyan(getSkillDisplayName(skill)));
-      summaryLines.push('');
-      summaryLines.push(`  ${chalk.bold('Agent'.padEnd(maxAgentLen + 2))}${chalk.bold('Directory')}`);
+      if (summaryLines.length > 0) summaryLines.push('');
       
-      for (const agent of targetAgents) {
-        const fullPath = getInstallPath(skill.name, agent, { global: installGlobally });
-        // Strip the skill name from the end to show just the base directory
-        const basePath = fullPath.replace(/\/[^/]+$/, '/');
-        const installed = overwriteStatus.get(skill.name)?.get(agent) ?? false;
-        const status = installed ? chalk.yellow(' (overwrite)') : '';
-        const agentName = agents[agent].displayName.padEnd(maxAgentLen + 2);
-        summaryLines.push(`  ${agentName}${chalk.dim(basePath)}${status}`);
+      const canonicalPath = getCanonicalPath(skill.name, { global: installGlobally });
+      const shortCanonical = shortenPath(canonicalPath, cwd);
+      summaryLines.push(`${chalk.cyan(shortCanonical)}`);
+      
+      const skillOverwrites = overwriteStatus.get(skill.name);
+      const overwriteAgents = targetAgents
+        .filter(a => skillOverwrites?.get(a))
+        .map(a => agents[a].displayName);
+      
+      summaryLines.push(`  ${chalk.dim('→')} ${formatList(agentNames)}`);
+      
+      if (overwriteAgents.length > 0) {
+        summaryLines.push(`  ${chalk.yellow('overwrites:')} ${formatList(overwriteAgents)}`);
       }
     }
     
@@ -326,7 +351,7 @@ async function main(source: string, options: Options) {
 
     spinner.start('Installing skills...');
 
-    const results: { skill: string; agent: string; success: boolean; path: string; error?: string }[] = [];
+    const results: { skill: string; agent: string; success: boolean; path: string; canonicalPath?: string; symlinkFailed?: boolean; error?: string }[] = [];
 
     for (const skill of selectedSkills) {
       for (const agent of targetAgents) {
@@ -345,29 +370,20 @@ async function main(source: string, options: Options) {
     const successful = results.filter(r => r.success);
     const failed = results.filter(r => !r.success);
 
-    // Track installation result
-    // Build skillFiles map: { skillName: relative path to SKILL.md from repo root }
     const skillFiles: Record<string, string> = {};
     for (const skill of selectedSkills) {
-      // skill.path is absolute, compute relative from tempDir (repo root)
       let relativePath: string;
       if (tempDir && skill.path === tempDir) {
-        // Skill is at root level of repo
         relativePath = 'SKILL.md';
       } else if (tempDir && skill.path.startsWith(tempDir + '/')) {
-        // Compute path relative to repo root (tempDir), not search path
         relativePath = skill.path.slice(tempDir.length + 1) + '/SKILL.md';
       } else {
-        // Local path - skip telemetry for local installs
         continue;
       }
       skillFiles[skill.name] = relativePath;
     }
 
-    // Normalize source to owner/repo format for telemetry
     const normalizedSource = getOwnerRepo(parsed);
-    
-    // Only track if we have a valid remote source
     if (normalizedSource) {
       track({
         event: 'install',
@@ -380,35 +396,44 @@ async function main(source: string, options: Options) {
     }
 
     if (successful.length > 0) {
-      // Group by skill name for cleaner output
-      const bySkill = new Map<string, string[]>();
+      const bySkill = new Map<string, typeof results>();
       for (const r of successful) {
-        const skillAgents = bySkill.get(r.skill) || [];
-        skillAgents.push(r.agent);
-        bySkill.set(r.skill, skillAgents);
+        const skillResults = bySkill.get(r.skill) || [];
+        skillResults.push(r);
+        bySkill.set(r.skill, skillResults);
       }
       
       const skillCount = bySkill.size;
       const agentCount = new Set(successful.map(r => r.agent)).size;
-      
-      // Build results list
+      const symlinkFailures = successful.filter(r => r.symlinkFailed);
+      const copiedAgents = symlinkFailures.map(r => r.agent);
       const resultLines: string[] = [];
       
-      for (const [skill, skillAgents] of bySkill) {
-        resultLines.push(`${chalk.green('✓')} ${chalk.bold(skill)}`);
-        for (const agent of skillAgents) {
-          resultLines.push(`  ${chalk.dim(agent)}`);
+      for (const [, skillResults] of bySkill) {
+        const firstResult = skillResults[0]!;
+        if (firstResult.canonicalPath) {
+          const shortPath = shortenPath(firstResult.canonicalPath, cwd);
+          resultLines.push(`${chalk.green('✓')} ${shortPath}`);
         }
-        resultLines.push(''); // blank line between skills
-      }
-      
-      // Remove trailing blank line
-      if (resultLines.length > 0 && resultLines[resultLines.length - 1] === '') {
-        resultLines.pop();
+        const symlinked = skillResults.filter(r => !r.symlinkFailed).map(r => r.agent);
+        const copied = skillResults.filter(r => r.symlinkFailed).map(r => r.agent);
+        
+        if (symlinked.length > 0) {
+          resultLines.push(`  ${chalk.dim('→')} ${formatList(symlinked)}`);
+        }
+        if (copied.length > 0) {
+          resultLines.push(`  ${chalk.yellow('copied →')} ${formatList(copied)}`);
+        }
       }
       
       const title = chalk.green(`Installed ${skillCount} skill${skillCount !== 1 ? 's' : ''} to ${agentCount} agent${agentCount !== 1 ? 's' : ''}`);
       p.note(resultLines.join('\n'), title);
+      
+      // Show symlink failure warning
+      if (symlinkFailures.length > 0) {
+        p.log.warn(chalk.yellow(`Symlinks failed for: ${formatList(copiedAgents)}`));
+        p.log.message(chalk.dim('  Files were copied instead. On Windows, enable Developer Mode for symlink support.'));
+      }
     }
 
     if (failed.length > 0) {
