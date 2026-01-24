@@ -366,6 +366,9 @@ function showBanner(): void {
     `  ${DIM}$${RESET} ${TEXT}npx skills add ${DIM}<package>${RESET}    ${DIM}Install a skill${RESET}`
   );
   console.log(
+    `  ${DIM}$${RESET} ${TEXT}npx skills find ${DIM}[query]${RESET}     ${DIM}Search for skills${RESET}`
+  );
+  console.log(
     `  ${DIM}$${RESET} ${TEXT}npx skills check${RESET}            ${DIM}Check for updates${RESET}`
   );
   console.log(
