@@ -1,5 +1,5 @@
 import { readFile, writeFile, mkdir } from 'fs/promises';
-import { join, dirname } from 'path';
+import { join, dirname, sep } from 'path';
 import { homedir } from 'os';
 import { createHash } from 'crypto';
 
@@ -127,15 +127,18 @@ export async function fetchSkillFolderHash(
   skillPath: string
 ): Promise<string | null> {
   // Normalize the skill path - remove SKILL.md suffix to get folder path
+  // Handle both forward and backslash separators for cross-platform compatibility
   let folderPath = skillPath;
-  if (folderPath.endsWith('/SKILL.md')) {
+  if (folderPath.endsWith('/SKILL.md') || folderPath.endsWith('\\SKILL.md')) {
     folderPath = folderPath.slice(0, -9);
   } else if (folderPath.endsWith('SKILL.md')) {
     folderPath = folderPath.slice(0, -8);
   }
-  if (folderPath.endsWith('/')) {
+  if (folderPath.endsWith('/') || folderPath.endsWith('\\')) {
     folderPath = folderPath.slice(0, -1);
   }
+  // Convert Windows backslashes to forward slashes for GitHub API
+  folderPath = folderPath.split(sep).join('/').split('\\').join('/');
 
   const branches = ['main', 'master'];
 

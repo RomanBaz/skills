@@ -2,6 +2,7 @@ import * as p from '@clack/prompts';
 import pc from 'picocolors';
 import { existsSync } from 'fs';
 import { homedir } from 'os';
+import { sep } from 'path';
 import { parseSource, getOwnerRepo, parseOwnerRepo, isRepoPrivate } from './source-parser.ts';
 
 /**
@@ -47,13 +48,15 @@ export function initTelemetry(version: string): void {
 
 /**
  * Shortens a path for display: replaces homedir with ~ and cwd with .
+ * Handles both Unix and Windows path separators.
  */
 function shortenPath(fullPath: string, cwd: string): string {
   const home = homedir();
-  if (fullPath.startsWith(home)) {
-    return fullPath.replace(home, '~');
+  // Ensure we match complete path segments by checking for separator after the prefix
+  if (fullPath === home || fullPath.startsWith(home + sep)) {
+    return '~' + fullPath.slice(home.length);
   }
-  if (fullPath.startsWith(cwd)) {
+  if (fullPath === cwd || fullPath.startsWith(cwd + sep)) {
     return '.' + fullPath.slice(cwd.length);
   }
   return fullPath;
@@ -1736,9 +1739,14 @@ export async function runAdd(args: string[], options: AddOptions = {}): Promise<
       if (tempDir && skill.path === tempDir) {
         // Skill is at root level of repo
         relativePath = 'SKILL.md';
-      } else if (tempDir && skill.path.startsWith(tempDir + '/')) {
+      } else if (tempDir && skill.path.startsWith(tempDir + sep)) {
         // Compute path relative to repo root (tempDir), not search path
-        relativePath = skill.path.slice(tempDir.length + 1) + '/SKILL.md';
+        // Use forward slashes for telemetry (URL-style paths)
+        relativePath =
+          skill.path
+            .slice(tempDir.length + 1)
+            .split(sep)
+            .join('/') + '/SKILL.md';
       } else {
         // Local path - skip telemetry for local installs
         continue;
