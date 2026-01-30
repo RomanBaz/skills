@@ -370,6 +370,20 @@ describe('parseAddOptions', () => {
     expect(result.options.skill).toEqual(['*']);
     expect(result.options.yes).toBe(true);
   });
+
+  it('should parse --full-depth flag', () => {
+    const result = parseAddOptions(['source', '--full-depth']);
+    expect(result.source).toEqual(['source']);
+    expect(result.options.fullDepth).toBe(true);
+  });
+
+  it('should parse --full-depth with other flags', () => {
+    const result = parseAddOptions(['source', '--full-depth', '--list', '-g']);
+    expect(result.source).toEqual(['source']);
+    expect(result.options.fullDepth).toBe(true);
+    expect(result.options.list).toBe(true);
+    expect(result.options.global).toBe(true);
+  });
 });
 
 describe('find-skills prompt with -y flag', () => {

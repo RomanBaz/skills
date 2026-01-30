@@ -1,6 +1,7 @@
 export type AgentType =
   | 'amp'
   | 'antigravity'
+  | 'augment'
   | 'claude-code'
   | 'moltbot'
   | 'cline'
@@ -20,6 +21,7 @@ export type AgentType =
   | 'kiro-cli'
   | 'kode'
   | 'mcpjam'
+  | 'mistral-vibe'
   | 'mux'
   | 'neovate'
   | 'opencode'

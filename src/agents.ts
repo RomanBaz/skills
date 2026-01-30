@@ -31,6 +31,15 @@ export const agents: Record<AgentType, AgentConfig> = {
       );
     },
   },
+  augment: {
+    name: 'augment',
+    displayName: 'Augment',
+    skillsDir: '.augment/rules',
+    globalSkillsDir: join(home, '.augment/rules'),
+    detectInstalled: async () => {
+      return existsSync(join(home, '.augment'));
+    },
+  },
   'claude-code': {
     name: 'claude-code',
     displayName: 'Claude Code',
@@ -202,6 +211,15 @@ export const agents: Record<AgentType, AgentConfig> = {
     globalSkillsDir: join(home, '.mcpjam/skills'),
     detectInstalled: async () => {
       return existsSync(join(home, '.mcpjam'));
+    },
+  },
+  'mistral-vibe': {
+    name: 'mistral-vibe',
+    displayName: 'Mistral Vibe',
+    skillsDir: '.vibe/skills',
+    globalSkillsDir: join(home, '.vibe/skills'),
+    detectInstalled: async () => {
+      return existsSync(join(home, '.vibe'));
     },
   },
   mux: {

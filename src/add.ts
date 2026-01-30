@@ -231,6 +231,7 @@ export interface AddOptions {
   skill?: string[];
   list?: boolean;
   all?: boolean;
+  fullDepth?: boolean;
 }
 
 /**
@@ -1459,7 +1460,10 @@ export async function runAdd(args: string[], options: AddOptions = {}): Promise<
     const includeInternal = !!(options.skill && options.skill.length > 0);
 
     spinner.start('Discovering skills...');
-    const skills = await discoverSkills(skillsDir, parsed.subpath, { includeInternal });
+    const skills = await discoverSkills(skillsDir, parsed.subpath, {
+      includeInternal,
+      fullDepth: options.fullDepth,
+    });
 
     if (skills.length === 0) {
       spinner.stop(pc.red('No skills found'));
@@ -2054,6 +2058,8 @@ export function parseAddOptions(args: string[]): { source: string[]; options: Ad
         nextArg = args[i];
       }
       i--; // Back up one since the loop will increment
+    } else if (arg === '--full-depth') {
+      options.fullDepth = true;
     } else if (arg && !arg.startsWith('-')) {
       source.push(arg);
     }

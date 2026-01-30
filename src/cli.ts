@@ -12,15 +12,6 @@ import { runList } from './list.ts';
 import { removeCommand, parseRemoveOptions } from './remove.ts';
 import { track } from './telemetry.ts';
 
-export function formatSkippedMessage(skippedSkills: string[]): string | null {
-  if (skippedSkills.length === 0) return null;
-  const lines = [`Skipped ${skippedSkills.length} (reinstall needed):`];
-  for (const skill of skippedSkills) {
-    lines.push(`  - ${skill}`);
-  }
-  return lines.join('\n');
-}
-
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 function getVersion(): string {
@@ -123,6 +114,7 @@ ${BOLD}Add Options:${RESET}
   -l, --list             List available skills in the repository without installing
   -y, --yes              Skip confirmation prompts
   --all                  Shorthand for --skill '*' --agent '*' -y
+  --full-depth           Search all subdirectories even when a root SKILL.md exists
 
 ${BOLD}Remove Options:${RESET}
   -g, --global           Remove from global scope
@@ -351,14 +343,12 @@ async function runCheck(args: string[] = []): Promise<void> {
     skills: [],
   };
 
-  const skippedSkills: string[] = [];
   for (const skillName of skillNames) {
     const entry = lock.skills[skillName];
     if (!entry) continue;
 
-    // Skip skills without skillFolderHash (shouldn't happen with v3)
+    // Skip skills without skillFolderHash (e.g., private repos where API can't fetch hash)
     if (!entry.skillFolderHash) {
-      skippedSkills.push(skillName);
       continue;
     }
 
@@ -368,11 +358,6 @@ async function runCheck(args: string[] = []): Promise<void> {
       path: entry.skillPath,
       skillFolderHash: entry.skillFolderHash,
     });
-  }
-
-  const skippedMsg = formatSkippedMessage(skippedSkills);
-  if (skippedMsg) {
-    console.log(`${DIM}${skippedMsg}${RESET}`);
   }
 
   if (checkRequest.skills.length === 0) {
@@ -452,14 +437,12 @@ async function runUpdate(): Promise<void> {
     skills: [],
   };
 
-  const skippedSkills: string[] = [];
   for (const skillName of skillNames) {
     const entry = lock.skills[skillName];
     if (!entry) continue;
 
-    // Skip skills without skillFolderHash (shouldn't happen with v3)
+    // Skip skills without skillFolderHash (e.g., private repos where API can't fetch hash)
     if (!entry.skillFolderHash) {
-      skippedSkills.push(skillName);
       continue;
     }
 
@@ -469,11 +452,6 @@ async function runUpdate(): Promise<void> {
       path: entry.skillPath,
       skillFolderHash: entry.skillFolderHash,
     });
-  }
-
-  const skippedMsg = formatSkippedMessage(skippedSkills);
-  if (skippedMsg) {
-    console.log(`${DIM}${skippedMsg}${RESET}`);
   }
 
   if (checkRequest.skills.length === 0) {
