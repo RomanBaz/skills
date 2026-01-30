@@ -533,7 +533,7 @@ async function handleRemoteSkill(
   p.outro(pc.green('Done!'));
 
   // Prompt for find-skills after successful install
-  await promptForFindSkills(options);
+  await promptForFindSkills(options, targetAgents);
 }
 
 /**
@@ -979,7 +979,7 @@ async function handleWellKnownSkills(
   p.outro(pc.green('Done!'));
 
   // Prompt for find-skills after successful install
-  await promptForFindSkills(options);
+  await promptForFindSkills(options, targetAgents);
 }
 
 /**
@@ -1289,7 +1289,7 @@ async function handleDirectUrlSkillLegacy(
   p.outro(pc.green('Done!'));
 
   // Prompt for find-skills after successful install
-  await promptForFindSkills(options);
+  await promptForFindSkills(options, targetAgents);
 }
 
 export async function runAdd(args: string[], options: AddOptions = {}): Promise<void> {
@@ -1852,7 +1852,7 @@ export async function runAdd(args: string[], options: AddOptions = {}): Promise<
     p.outro(pc.green('Done!'));
 
     // Prompt for find-skills after successful install
-    await promptForFindSkills(options);
+    await promptForFindSkills(options, targetAgents);
   } catch (error) {
     if (error instanceof GitCloneError) {
       p.log.error(pc.red('Failed to clone repository'));
@@ -1888,7 +1888,10 @@ async function cleanup(tempDir: string | null) {
  *
  * @param options - Installation options, used to check for -y/--yes flag
  */
-async function promptForFindSkills(options?: AddOptions): Promise<void> {
+async function promptForFindSkills(
+  options?: AddOptions,
+  targetAgents?: AgentType[]
+): Promise<void> {
   // Skip if already dismissed or not in interactive mode
   if (!process.stdin.isTTY) return;
   if (options?.yes) return;
@@ -1919,20 +1922,30 @@ async function promptForFindSkills(options?: AddOptions): Promise<void> {
     }
 
     if (install) {
-      // Install find-skills globally to all agents
+      // Install find-skills to the same agents the user selected, excluding replit
+      // (replit doesn't support global skill installation)
       // Mark as dismissed first to prevent recursive prompts
       await dismissPrompt('findSkillsPrompt');
+
+      // Filter out replit from target agents
+      const findSkillsAgents = targetAgents?.filter((a) => a !== 'replit');
+
+      // Skip if no valid agents remain after filtering
+      if (!findSkillsAgents || findSkillsAgents.length === 0) {
+        return;
+      }
 
       console.log();
       p.log.step('Installing find-skills skill...');
 
       try {
         // Call runAdd directly instead of spawning subprocess
+        // Use the same agents that were selected for the original install (minus replit)
         await runAdd(['vercel-labs/skills'], {
           skill: ['find-skills'],
           global: true,
           yes: true,
-          all: true,
+          agent: findSkillsAgents,
         });
       } catch {
         p.log.warn('Failed to install find-skills. You can try again with:');
