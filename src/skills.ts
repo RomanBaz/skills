@@ -68,9 +68,7 @@ async function findSkillDirs(dir: string, depth = 0, maxDepth = 5): Promise<stri
   try {
     const [hasSkill, entries] = await Promise.all([
       hasSkillMd(dir),
-      readdir(dir, { withFileTypes: true })
-        .then((e) => e.sort((a, b) => a.name.localeCompare(b.name)))
-        .catch(() => []),
+      readdir(dir, { withFileTypes: true }).catch(() => []),
     ]);
 
     const currentDir = hasSkill ? [dir] : [];
@@ -179,6 +177,7 @@ export async function discoverSkills(
   // Fall back to recursive search if nothing found, or if fullDepth is set
   if (skills.length === 0 || options?.fullDepth) {
     const allSkillDirs = await findSkillDirs(searchPath);
+    allSkillDirs.sort((a, b) => a.localeCompare(b));
 
     for (const skillDir of allSkillDirs) {
       const skill = await parseSkillMd(join(skillDir, 'SKILL.md'), options);
