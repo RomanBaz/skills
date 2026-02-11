@@ -68,7 +68,9 @@ async function findSkillDirs(dir: string, depth = 0, maxDepth = 5): Promise<stri
   try {
     const [hasSkill, entries] = await Promise.all([
       hasSkillMd(dir),
-      readdir(dir, { withFileTypes: true }).catch(() => []),
+      readdir(dir, { withFileTypes: true })
+        .then((e) => e.sort((a, b) => a.name.localeCompare(b.name)))
+        .catch(() => []),
     ]);
 
     const currentDir = hasSkill ? [dir] : [];
@@ -155,6 +157,7 @@ export async function discoverSkills(
   for (const dir of prioritySearchDirs) {
     try {
       const entries = await readdir(dir, { withFileTypes: true });
+      entries.sort((a, b) => a.name.localeCompare(b.name));
 
       for (const entry of entries) {
         if (entry.isDirectory()) {
