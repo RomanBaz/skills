@@ -11,7 +11,7 @@ import { runFind } from './find.ts';
 import { runList } from './list.ts';
 import { removeCommand, parseRemoveOptions } from './remove.ts';
 import { track } from './telemetry.ts';
-import { fetchSkillFolderHash, getGitHubToken } from './skill-lock.ts';
+import { fetchSkillFolderHash, fetchSnapshot, getGitHubToken } from './skill-lock.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -263,6 +263,8 @@ interface SkillLockEntry {
   skillPath?: string;
   /** GitHub tree SHA for the entire skill folder (v3) */
   skillFolderHash: string;
+  /** Content-based hash from snapshot service */
+  skillsComputedHash?: string;
   installedAt: string;
   updatedAt: string;
 }
@@ -340,29 +342,23 @@ async function runCheck(args: string[] = []): Promise<void> {
     return;
   }
 
-  // Get GitHub token from user's environment for higher rate limits
-  const token = getGitHubToken();
-
-  // Group skills by source (owner/repo) to batch GitHub API calls
-  const skillsBySource = new Map<string, Array<{ name: string; entry: SkillLockEntry }>>();
+  // Collect GitHub-sourced skills (all are checkable via snapshot API)
+  const checkableSkills: Array<{ name: string; entry: SkillLockEntry }> = [];
   let skippedCount = 0;
 
   for (const skillName of skillNames) {
     const entry = lock.skills[skillName];
     if (!entry) continue;
 
-    // Only check GitHub-sourced skills with folder hash
-    if (entry.sourceType !== 'github' || !entry.skillFolderHash || !entry.skillPath) {
+    if (entry.sourceType !== 'github') {
       skippedCount++;
       continue;
     }
 
-    const existing = skillsBySource.get(entry.source) || [];
-    existing.push({ name: skillName, entry });
-    skillsBySource.set(entry.source, existing);
+    checkableSkills.push({ name: skillName, entry });
   }
 
-  const totalSkills = skillNames.length - skippedCount;
+  const totalSkills = checkableSkills.length;
   if (totalSkills === 0) {
     console.log(`${DIM}No GitHub skills to check.${RESET}`);
     return;
@@ -372,29 +368,70 @@ async function runCheck(args: string[] = []): Promise<void> {
 
   const updates: Array<{ name: string; source: string }> = [];
   const errors: Array<{ name: string; source: string; error: string }> = [];
+  let lockDirty = false;
 
-  // Check each source (one API call per repo)
-  for (const [source, skills] of skillsBySource) {
-    for (const { name, entry } of skills) {
-      try {
-        const latestHash = await fetchSkillFolderHash(source, entry.skillPath!, token);
+  // Get GitHub token as fallback for skills without snapshot
+  const token = getGitHubToken();
+
+  for (const { name, entry } of checkableSkills) {
+    try {
+      // Try snapshot first (works for any default branch, no GitHub API needed)
+      const snapshot = await fetchSnapshot(entry.source, name);
+
+      if (snapshot) {
+        let hasUpdate = false;
+
+        if (entry.skillsComputedHash) {
+          // Best case: compare computed hashes directly
+          hasUpdate = snapshot.skillsComputedHash !== entry.skillsComputedHash;
+        } else if (snapshot.treeSha && entry.skillFolderHash) {
+          // Legacy skill: compare tree SHAs to detect real updates
+          hasUpdate = snapshot.treeSha !== entry.skillFolderHash;
+        }
+        // else: no local hash at all — first check seeds the baseline (no update reported)
+
+        if (hasUpdate) {
+          updates.push({ name, source: entry.source });
+        }
+
+        // Backfill: store skillsComputedHash so future checks use it directly
+        if (!entry.skillsComputedHash) {
+          entry.skillsComputedHash = snapshot.skillsComputedHash;
+          if (snapshot.treeSha && !entry.skillFolderHash) {
+            entry.skillFolderHash = snapshot.treeSha;
+          }
+          lock.skills[name] = entry;
+          lockDirty = true;
+        }
+
+        continue;
+      }
+
+      // Fallback: use GitHub Trees API (legacy path for skills without snapshots)
+      if (entry.skillFolderHash && entry.skillPath) {
+        const latestHash = await fetchSkillFolderHash(entry.source, entry.skillPath, token);
 
         if (!latestHash) {
-          errors.push({ name, source, error: 'Could not fetch from GitHub' });
+          errors.push({ name, source: entry.source, error: 'Could not fetch from GitHub' });
           continue;
         }
 
         if (latestHash !== entry.skillFolderHash) {
-          updates.push({ name, source });
+          updates.push({ name, source: entry.source });
         }
-      } catch (err) {
-        errors.push({
-          name,
-          source,
-          error: err instanceof Error ? err.message : 'Unknown error',
-        });
       }
+    } catch (err) {
+      errors.push({
+        name,
+        source: entry.source,
+        error: err instanceof Error ? err.message : 'Unknown error',
+      });
     }
+  }
+
+  // Persist backfilled hashes so subsequent checks are faster
+  if (lockDirty) {
+    writeSkillLock(lock);
   }
 
   console.log();
@@ -442,38 +479,78 @@ async function runUpdate(): Promise<void> {
     return;
   }
 
-  // Get GitHub token from user's environment for higher rate limits
-  const token = getGitHubToken();
-
-  // Find skills that need updates by checking GitHub directly
-  const updates: Array<{ name: string; source: string; entry: SkillLockEntry }> = [];
-  let checkedCount = 0;
+  // Collect GitHub-sourced skills (all are checkable via snapshot API)
+  const checkableSkills: Array<{ name: string; entry: SkillLockEntry }> = [];
 
   for (const skillName of skillNames) {
     const entry = lock.skills[skillName];
     if (!entry) continue;
 
-    // Only check GitHub-sourced skills with folder hash
-    if (entry.sourceType !== 'github' || !entry.skillFolderHash || !entry.skillPath) {
-      continue;
-    }
+    if (entry.sourceType !== 'github') continue;
 
-    checkedCount++;
+    checkableSkills.push({ name: skillName, entry });
+  }
 
+  if (checkableSkills.length === 0) {
+    console.log(`${DIM}No skills to check.${RESET}`);
+    return;
+  }
+
+  // Get GitHub token as fallback for skills without snapshot
+  const token = getGitHubToken();
+
+  // Find skills that need updates
+  const updates: Array<{ name: string; source: string; entry: SkillLockEntry }> = [];
+  let lockDirty = false;
+
+  for (const { name, entry } of checkableSkills) {
     try {
-      const latestHash = await fetchSkillFolderHash(entry.source, entry.skillPath, token);
+      // Try snapshot first (works for any default branch, no GitHub API needed)
+      const snapshot = await fetchSnapshot(entry.source, name);
 
-      if (latestHash && latestHash !== entry.skillFolderHash) {
-        updates.push({ name: skillName, source: entry.source, entry });
+      if (snapshot) {
+        let hasUpdate = false;
+
+        if (entry.skillsComputedHash) {
+          hasUpdate = snapshot.skillsComputedHash !== entry.skillsComputedHash;
+        } else if (snapshot.treeSha && entry.skillFolderHash) {
+          hasUpdate = snapshot.treeSha !== entry.skillFolderHash;
+        }
+        // else: no local hash — seed baseline, no update reported
+
+        if (hasUpdate) {
+          updates.push({ name, source: entry.source, entry });
+        }
+
+        // Backfill: store skillsComputedHash so future checks use it directly
+        if (!entry.skillsComputedHash) {
+          entry.skillsComputedHash = snapshot.skillsComputedHash;
+          if (snapshot.treeSha && !entry.skillFolderHash) {
+            entry.skillFolderHash = snapshot.treeSha;
+          }
+          lock.skills[name] = entry;
+          lockDirty = true;
+        }
+
+        continue;
+      }
+
+      // Fallback: use GitHub Trees API (legacy path for skills without snapshots)
+      if (entry.skillFolderHash && entry.skillPath) {
+        const latestHash = await fetchSkillFolderHash(entry.source, entry.skillPath, token);
+
+        if (latestHash && latestHash !== entry.skillFolderHash) {
+          updates.push({ name, source: entry.source, entry });
+        }
       }
     } catch {
       // Skip skills that fail to check
     }
   }
 
-  if (checkedCount === 0) {
-    console.log(`${DIM}No skills to check.${RESET}`);
-    return;
+  // Persist backfilled hashes
+  if (lockDirty) {
+    writeSkillLock(lock);
   }
 
   if (updates.length === 0) {
@@ -492,9 +569,10 @@ async function runUpdate(): Promise<void> {
   for (const update of updates) {
     console.log(`${TEXT}Updating ${update.name}...${RESET}`);
 
-    // Build the URL with subpath to target the specific skill directory
-    // e.g., https://github.com/owner/repo/tree/main/skills/my-skill
-    let installUrl = update.entry.sourceUrl;
+    // Build the install source for `skills add`
+    // Use owner/repo/subpath shorthand so git clones the default branch
+    // (avoids hardcoding a branch name like "main" or "master")
+    let installSource = update.entry.source; // e.g., "owner/repo"
     if (update.entry.skillPath) {
       // Extract the skill folder path (remove /SKILL.md suffix)
       let skillFolder = update.entry.skillPath;
@@ -507,14 +585,15 @@ async function runUpdate(): Promise<void> {
         skillFolder = skillFolder.slice(0, -1);
       }
 
-      // Convert git URL to tree URL with path
-      // https://github.com/owner/repo.git -> https://github.com/owner/repo/tree/main/path
-      installUrl = update.entry.sourceUrl.replace(/\.git$/, '').replace(/\/$/, '');
-      installUrl = `${installUrl}/tree/main/${skillFolder}`;
+      // Use shorthand: owner/repo/path/to/skill
+      // parseSource handles this as GitHub shorthand with subpath
+      if (skillFolder) {
+        installSource = `${update.entry.source}/${skillFolder}`;
+      }
     }
 
     // Use skills CLI to reinstall with -g -y flags
-    const result = spawnSync('npx', ['-y', 'skills', 'add', installUrl, '-g', '-y'], {
+    const result = spawnSync('npx', ['-y', 'skills', 'add', installSource, '-g', '-y'], {
       stdio: ['inherit', 'pipe', 'pipe'],
     });
 

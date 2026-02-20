@@ -52,6 +52,7 @@ import { fetchMintlifySkill } from './mintlify.ts';
 import {
   addSkillToLock,
   fetchSkillFolderHash,
+  fetchSnapshot,
   isPromptDismissed,
   dismissPrompt,
   getLastSelectedAgents,
@@ -693,11 +694,19 @@ async function handleRemoteSkill(
   // Add to skill lock file for update tracking (only for global installs)
   if (successful.length > 0 && installGlobally) {
     try {
-      // Try to fetch the folder hash from GitHub Trees API
       let skillFolderHash = '';
+      let skillsComputedHash: string | undefined;
       if (remoteSkill.providerId === 'github') {
-        const hash = await fetchSkillFolderHash(remoteSkill.sourceIdentifier, url);
-        if (hash) skillFolderHash = hash;
+        // Try snapshot first (has both computed hash and tree SHA)
+        const snapshot = await fetchSnapshot(remoteSkill.sourceIdentifier, remoteSkill.installName);
+        if (snapshot) {
+          skillsComputedHash = snapshot.skillsComputedHash;
+          if (snapshot.treeSha) skillFolderHash = snapshot.treeSha;
+        } else {
+          // Fallback to Trees API
+          const hash = await fetchSkillFolderHash(remoteSkill.sourceIdentifier, url);
+          if (hash) skillFolderHash = hash;
+        }
       }
 
       await addSkillToLock(remoteSkill.installName, {
@@ -705,6 +714,7 @@ async function handleRemoteSkill(
         sourceType: remoteSkill.providerId,
         sourceUrl: url,
         skillFolderHash,
+        skillsComputedHash,
       });
     } catch {
       // Don't fail installation if lock file update fails
@@ -1991,12 +2001,21 @@ export async function runAdd(args: string[], options: AddOptions = {}): Promise<
         const skillDisplayName = getSkillDisplayName(skill);
         if (successfulSkillNames.has(skillDisplayName)) {
           try {
-            // Fetch the folder hash from GitHub Trees API
+            // Fetch hashes for update tracking
             let skillFolderHash = '';
+            let skillsComputedHash: string | undefined;
             const skillPathValue = skillFiles[skill.name];
-            if (parsed.type === 'github' && skillPathValue) {
-              const hash = await fetchSkillFolderHash(normalizedSource, skillPathValue);
-              if (hash) skillFolderHash = hash;
+            if (parsed.type === 'github') {
+              // Try snapshot first (has both computed hash and tree SHA)
+              const snapshot = await fetchSnapshot(normalizedSource, skillDisplayName);
+              if (snapshot) {
+                skillsComputedHash = snapshot.skillsComputedHash;
+                if (snapshot.treeSha) skillFolderHash = snapshot.treeSha;
+              } else if (skillPathValue) {
+                // Fallback to Trees API if no snapshot exists
+                const hash = await fetchSkillFolderHash(normalizedSource, skillPathValue);
+                if (hash) skillFolderHash = hash;
+              }
             }
 
             await addSkillToLock(skill.name, {
@@ -2005,6 +2024,7 @@ export async function runAdd(args: string[], options: AddOptions = {}): Promise<
               sourceUrl: parsed.url,
               skillPath: skillPathValue,
               skillFolderHash,
+              skillsComputedHash,
             });
           } catch {
             // Don't fail installation if lock file update fails

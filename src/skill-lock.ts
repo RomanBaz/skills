@@ -23,9 +23,15 @@ export interface SkillLockEntry {
   /**
    * GitHub tree SHA for the entire skill folder.
    * This hash changes when ANY file in the skill folder changes.
-   * Fetched via GitHub Trees API by the telemetry server.
+   * @deprecated Use skillsComputedHash for update checks. Kept for backward compatibility.
    */
   skillFolderHash: string;
+  /**
+   * Content-based hash of the skill folder, computed by the snapshot service.
+   * Used for update checks. Skills installed before this field was added will
+   * only have skillFolderHash and will be migrated on next install/update.
+   */
+  skillsComputedHash?: string;
   /** ISO timestamp when the skill was first installed */
   installedAt: string;
   /** ISO timestamp when the skill was last updated */
@@ -146,6 +152,43 @@ export function getGitHubToken(): string | null {
   }
 
   return null;
+}
+
+const SNAPSHOT_API_URL = 'https://add-skill.vercel.sh/snapshot';
+
+/**
+ * Snapshot data returned by the snapshot API.
+ */
+export interface SkillSnapshot {
+  treeSha?: string;
+  skillsComputedHash: string;
+  source: string;
+  slug: string;
+  skillFolderPath: string;
+  fetchedAt: string;
+  updatedAt: string;
+}
+
+/**
+ * Fetch the snapshot for a skill from the snapshot API.
+ *
+ * @param source - GitHub owner/repo (e.g., "vercel-labs/agent-skills")
+ * @param skillName - The installed skill name / slug (e.g., "react-best-practices")
+ * @returns The snapshot data, or null if not found
+ */
+export async function fetchSnapshot(
+  source: string,
+  skillName: string
+): Promise<SkillSnapshot | null> {
+  try {
+    const url = `${SNAPSHOT_API_URL}?source=${encodeURIComponent(source)}&skill=${encodeURIComponent(skillName)}`;
+    const response = await fetch(url);
+    if (!response.ok) return null;
+    const data = (await response.json()) as SkillSnapshot;
+    return data;
+  } catch {
+    return null;
+  }
 }
 
 /**
