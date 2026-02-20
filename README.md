@@ -42,6 +42,7 @@ npx skills add ./my-local-skills
 | `-a, --agent <agents...>` | <!-- agent-names:start -->Target specific agents (e.g., `claude-code`, `codex`). See [Available Agents](#supported-agents)<!-- agent-names:end -->                  |
 | `-s, --skill <skills...>` | Install specific skills by name (use `'*'` for all skills)                                                                                         |
 | `-l, --list`              | List available skills without installing                                                                                                           |
+| `--copy`                  | Copy files instead of symlinking to agent directories                                                                                              |
 | `-y, --yes`               | Skip all confirmation prompts                                                                                                                      |
 | `--all`                   | Install all skills to all agents without prompts                                                                                                   |
 
@@ -91,14 +92,14 @@ When installing interactively, you can choose:
 
 ## Other Commands
 
-| Command                      | Description                                             |
-| ---------------------------- | ------------------------------------------------------- |
-| `npx skills list`            | List installed skills (alias: `ls`)                     |
-| `npx skills find [query]`    | Search for skills interactively or by keyword           |
-| `npx skills remove [skills]` | Remove installed skills from agents                     |
-| `npx skills check`           | Check for available skill updates                       |
-| `npx skills update`          | Update all installed skills to latest versions          |
-| `npx skills init [name]`     | Create a new SKILL.md template                          |
+| Command                      | Description                                    |
+| ---------------------------- | ---------------------------------------------- |
+| `npx skills list`            | List installed skills (alias: `ls`)            |
+| `npx skills find [query]`    | Search for skills interactively or by keyword  |
+| `npx skills remove [skills]` | Remove installed skills from agents            |
+| `npx skills check`           | Check for available skill updates              |
+| `npx skills update`          | Update all installed skills to latest versions |
+| `npx skills init [name]`     | Create a new SKILL.md template                 |
 
 ### `skills list`
 
@@ -180,13 +181,13 @@ npx skills remove my-skill --agent '*'
 npx skills rm my-skill
 ```
 
-| Option              | Description                                          |
-| ------------------- | ---------------------------------------------------- |
-| `-g, --global`      | Remove from global scope (~/) instead of project      |
-| `-a, --agent`       | Remove from specific agents (use `'*'` for all)      |
-| `-s, --skill`       | Specify skills to remove (use `'*'` for all)         |
-| `-y, --yes`         | Skip confirmation prompts                            |
-| `--all`             | Shorthand for `--skill '*' --agent '*' -y`           |
+| Option         | Description                                      |
+| -------------- | ------------------------------------------------ |
+| `-g, --global` | Remove from global scope (~/) instead of project |
+| `-a, --agent`  | Remove from specific agents (use `'*'` for all)  |
+| `-s, --skill`  | Specify skills to remove (use `'*'` for all)     |
+| `-y, --yes`    | Skip confirmation prompts                        |
+| `--all`        | Shorthand for `--skill '*' --agent '*' -y`       |
 
 ## What are Agent Skills?
 
@@ -209,7 +210,7 @@ Skills can be installed to any of these agents:
 | Agent | `--agent` | Project Path | Global Path |
 |-------|-----------|--------------|-------------|
 | Amp, Kimi Code CLI, Replit, Universal | `amp`, `kimi-cli`, `replit`, `universal` | `.agents/skills/` | `~/.config/agents/skills/` |
-| Antigravity | `antigravity` | `.agent/skills/` | `~/.gemini/antigravity/skills/` |
+| Antigravity | `antigravity` | `.agents/skills/` | `~/.gemini/antigravity/skills/` |
 | Augment | `augment` | `.augment/skills/` | `~/.augment/skills/` |
 | Claude Code | `claude-code` | `.claude/skills/` | `~/.claude/skills/` |
 | OpenClaw | `openclaw` | `skills/` | `~/.openclaw/skills/` |
@@ -310,6 +311,7 @@ metadata:
 The CLI searches for skills in these locations within a repository:
 
 <!-- skill-discovery:start -->
+
 - Root directory (if it contains `SKILL.md`)
 - `skills/`
 - `skills/.curated/`
@@ -357,11 +359,13 @@ If `.claude-plugin/marketplace.json` or `.claude-plugin/plugin.json` exists, ski
 // .claude-plugin/marketplace.json
 {
   "metadata": { "pluginRoot": "./plugins" },
-  "plugins": [{
-    "name": "my-plugin",
-    "source": "my-plugin",
-    "skills": ["./skills/review", "./skills/test"]
-  }]
+  "plugins": [
+    {
+      "name": "my-plugin",
+      "source": "my-plugin",
+      "skills": ["./skills/review", "./skills/test"]
+    }
+  ]
 }
 ```
 

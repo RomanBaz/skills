@@ -417,6 +417,7 @@ export interface AddOptions {
   list?: boolean;
   all?: boolean;
   fullDepth?: boolean;
+  copy?: boolean;
 }
 
 /**
@@ -497,8 +498,7 @@ async function handleRemoteSkill(
       process.exit(1);
     }
 
-    // Always include universal agents
-    targetAgents = ensureUniversalAgents(options.agent as AgentType[]);
+    targetAgents = options.agent as AgentType[];
   } else {
     spinner.start('Loading agents...');
     const installedAgents = await detectInstalledAgents();
@@ -574,10 +574,10 @@ async function handleRemoteSkill(
     installGlobally = scope as boolean;
   }
 
-  // Prompt for install mode (symlink vs copy)
-  let installMode: InstallMode = 'symlink';
+  // Determine install mode (symlink vs copy)
+  let installMode: InstallMode = options.copy ? 'copy' : 'symlink';
 
-  if (!options.yes) {
+  if (!options.copy && !options.yes) {
     const modeChoice = await p.select({
       message: 'Installation method',
       options: [
@@ -923,7 +923,8 @@ async function handleWellKnownSkills(
         targetAgents = selected as AgentType[];
       }
     } else if (installedAgents.length === 1 || options.yes) {
-      targetAgents = installedAgents;
+      // Auto-select detected agents + ensure universal agents are included
+      targetAgents = ensureUniversalAgents(installedAgents);
       if (installedAgents.length === 1) {
         const firstAgent = installedAgents[0]!;
         p.log.info(`Installing to: ${pc.cyan(agents[firstAgent].displayName)}`);
@@ -974,10 +975,10 @@ async function handleWellKnownSkills(
     installGlobally = scope as boolean;
   }
 
-  // Prompt for install mode (symlink vs copy)
-  let installMode: InstallMode = 'symlink';
+  // Determine install mode (symlink vs copy)
+  let installMode: InstallMode = options.copy ? 'copy' : 'symlink';
 
-  if (!options.yes) {
+  if (!options.copy && !options.yes) {
     const modeChoice = await p.select({
       message: 'Installation method',
       options: [
@@ -1297,7 +1298,8 @@ async function handleDirectUrlSkillLegacy(
         targetAgents = selected as AgentType[];
       }
     } else if (installedAgents.length === 1 || options.yes) {
-      targetAgents = installedAgents;
+      // Auto-select detected agents + ensure universal agents are included
+      targetAgents = ensureUniversalAgents(installedAgents);
       if (installedAgents.length === 1) {
         const firstAgent = installedAgents[0]!;
         p.log.info(`Installing to: ${pc.cyan(agents[firstAgent].displayName)}`);
@@ -1739,7 +1741,8 @@ export async function runAdd(args: string[], options: AddOptions = {}): Promise<
           targetAgents = selected as AgentType[];
         }
       } else if (installedAgents.length === 1 || options.yes) {
-        targetAgents = installedAgents;
+        // Auto-select detected agents + ensure universal agents are included
+        targetAgents = ensureUniversalAgents(installedAgents);
         if (installedAgents.length === 1) {
           const firstAgent = installedAgents[0]!;
           p.log.info(`Installing to: ${pc.cyan(agents[firstAgent].displayName)}`);
@@ -1792,10 +1795,10 @@ export async function runAdd(args: string[], options: AddOptions = {}): Promise<
       installGlobally = scope as boolean;
     }
 
-    // Prompt for install mode (symlink vs copy)
-    let installMode: InstallMode = 'symlink';
+    // Determine install mode (symlink vs copy)
+    let installMode: InstallMode = options.copy ? 'copy' : 'symlink';
 
-    if (!options.yes) {
+    if (!options.copy && !options.yes) {
       const modeChoice = await p.select({
         message: 'Installation method',
         options: [
@@ -2226,6 +2229,8 @@ export function parseAddOptions(args: string[]): { source: string[]; options: Ad
       i--; // Back up one since the loop will increment
     } else if (arg === '--full-depth') {
       options.fullDepth = true;
+    } else if (arg === '--copy') {
+      options.copy = true;
     } else if (arg && !arg.startsWith('-')) {
       source.push(arg);
     }
